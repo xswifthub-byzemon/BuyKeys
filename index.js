@@ -2,13 +2,14 @@ const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } = require
 const express = require('express');
 const cors = require('cors');
 
-// --- 🔧 ดึงค่าจาก Variables ใน Railway ---
+// --- 🔧 ดึงค่าจาก Variables ---
 const TOKEN = process.env.DISCORD_TOKEN;     
 const CLIENT_ID = process.env.CLIENT_ID;     
-const OWNER_ID = process.env.OWNER_ID;       
+const OWNER_ID = process.env.OWNER_ID; 
+const GUILD_ID = process.env.GUILD_ID; // 🔥 ตัวแปรใหม่ สำหรับบังคับอัปเดตทันที
 const PORT = process.env.PORT || 3000;
 
-// --- 💾 ฐานข้อมูลจำลอง (เก็บในแรม) ---
+// --- 💾 ฐานข้อมูลจำลอง ---
 let keyDatabase = {}; 
 
 // ==========================================
@@ -28,7 +29,7 @@ app.get('/api/verify', (req, res) => {
 
     const now = new Date();
 
-    // 1. เช็คว่าคีย์หมดอายุหรือยัง (ถ้าเคยเริ่มใช้ไปแล้ว)
+    // 1. เช็ควันหมดอายุ
     if (keyData.expiresAt) {
         const expireDate = new Date(keyData.expiresAt);
         if (now > expireDate) {
@@ -36,11 +37,10 @@ app.get('/api/verify', (req, res) => {
         }
     }
 
-    // 2. ถ้าเป็นคีย์ใหม่ (ยังไม่เคยผูก HWID)
+    // 2. คีย์ใหม่ -> เริ่มนับเวลา
     if (keyData.hwid === null) {
         keyData.hwid = hwid;
         
-        // 🔥 เริ่มนับเวลาถอยหลัง ณ วินาทีที่กดใช้งาน
         const durationHours = parseInt(keyData.duration); 
         const expireTime = new Date(now.getTime() + (durationHours * 60 * 60 * 1000));
         keyData.expiresAt = expireTime.toISOString();
@@ -51,7 +51,7 @@ app.get('/api/verify', (req, res) => {
             expire: keyData.expiresAt 
         });
     } 
-    // 3. ถ้าคีย์เคยใช้แล้ว (เช็ค HWID)
+    // 3. คีย์เก่า -> เช็คเจ้าของเดิม
     else if (keyData.hwid === hwid) {
         return res.json({ status: "success", msg: "Welcome Back" });
     } else {
@@ -74,7 +74,7 @@ const commands = [
         .setDescription('✨ สร้างคีย์ฟรี แบบจำกัดเวลา (เฉพาะ Owner)')
         .addStringOption(option => 
             option.setName('prefix')
-            .setDescription('ชื่อนำหน้า (เช่น FREE, SWIFT)')
+            .setDescription('ชื่อนำหน้า (เช่น SWIFT)')
             .setRequired(true))
         .addStringOption(option =>
             option.setName('duration')
@@ -118,14 +118,22 @@ const rest = new REST({ version: '10' }).setToken(TOKEN);
 (async () => {
     try {
         console.log('กำลังอัปเดตคำสั่ง Slash Commands...');
-        await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
-        console.log('✅ ลงทะเบียนคำสั่งใหม่เรียบร้อย!');
+        
+        // 🔥 แก้ไขระบบอัปเดต: ถ้ามี GUILD_ID ให้ลงทะเบียนเฉพาะเซิฟนั้น (เร็วทันใจ)
+        if (GUILD_ID) {
+            console.log(`⚡ ตรวจพบ GUILD_ID: กำลังอัปเดตคำสั่งเข้าสู่เซิร์ฟเวอร์โดยตรง...`);
+            await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
+            console.log('✅ ลงทะเบียนคำสั่งแบบ Instant เสร็จสิ้น! (ลองพิมพ์ /genkey ดูได้เลย)');
+        } else {
+            console.log(`⚠️ ไม่พบ GUILD_ID: กำลังอัปเดตแบบ Global (อาจใช้เวลา 1 ชม.)`);
+            await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
+        }
+        
     } catch (error) {
         console.error(error);
     }
 })();
 
-// 🔥 ฟังก์ชันสุ่ม Chaos String
 function generateChaosString(length) {
     const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
     let result = '';
@@ -142,10 +150,9 @@ client.on('interactionCreate', async interaction => {
         return interaction.reply({ content: '🚫 เฉพาะซีม่อน (Owner) เท่านั้นที่ใช้ได้ค่ะ!', ephemeral: true });
     }
 
-    // --- คำสั่ง /genkey ปรับปรุงใหม่ ---
     if (interaction.commandName === 'genkey') {
         const prefix = interaction.options.getString('prefix').toUpperCase();
-        const durationInput = interaction.options.getString('duration');
+        const durationInput = interaction.options.getString('duration'); // รับค่า duration
         const note = interaction.options.getString('note') || 'Free Key';
         let amount = interaction.options.getInteger('amount') || 1;
 
@@ -153,11 +160,9 @@ client.on('interactionCreate', async interaction => {
         if (amount < 1) amount = 1;
 
         let generatedKeysList = [];
-        const timeOptions = ['6', '12', '24']; // ตัวเลือกสำหรับการสุ่ม
+        const timeOptions = ['6', '12', '24']; 
 
-        // ลูปสร้างคีย์
         for (let i = 0; i < amount; i++) {
-            // 🎲 คำนวณเวลา: ถ้าเลือก random ให้สุ่มเลย
             let finalDuration = durationInput;
             if (durationInput === 'random') {
                 finalDuration = timeOptions[Math.floor(Math.random() * timeOptions.length)];
@@ -168,32 +173,24 @@ client.on('interactionCreate', async interaction => {
 
             keyDatabase[newKey] = {
                 hwid: null,
-                duration: finalDuration, // เก็บเวลาที่ตั้งไว้ (6, 12, 24)
-                expiresAt: null, // ยังไม่เริ่มนับ จนกว่าจะใช้
+                duration: finalDuration,
+                expiresAt: null,
                 note: note,
                 createdAt: new Date().toISOString()
             };
             
-            // เพิ่มข้อมูลเวลาลงไปใน list (ซีม่อนจะได้รู้ว่าคีย์ไหนได้กี่ชม. กรณีสุ่ม)
-            if (durationInput === 'random') {
-                // ถ้าสุ่ม ไม่ต้องโชว์เวลาใน List ที่ก๊อป เดี๋ยวลูกค้าเลือกแต่ 24 ชม. 555
-                // หรือถ้าอยากโชว์บอกปายได้นะ แต่ตอนนี้ปายทำแบบเนียนๆ ไปก่อน
-                generatedKeysList.push(newKey);
-            } else {
-                generatedKeysList.push(newKey);
-            }
+            generatedKeysList.push(newKey);
         }
 
         const keyString = generatedKeysList.join('\n');
         const durationText = durationInput === 'random' ? "🎲 สุ่ม (6/12/24 ชม.)" : `⏳ ${durationInput} ชั่วโมง`;
 
         await interaction.reply({ 
-            content: `🎉 **สร้างคีย์สำเร็จ!** (${amount} คีย์)\n⏰ เวลา: ${durationText}\n📝 Note: ${note}\n\n\`${keyString}\``, 
+            content: `🎉 **สร้างคีย์สำเร็จ!** (${amount} คีย์)\n⏰ เวลา: ${durationText}\n📝 Note: ${note}\n\n\`\`\`text\n${keyString}\n\`\`\``, 
             ephemeral: true 
         });
     }
 
-    // --- คำสั่ง /checkkey ---
     else if (interaction.commandName === 'checkkey') {
         const key = interaction.options.getString('key');
         const data = keyDatabase[key];
@@ -201,15 +198,15 @@ client.on('interactionCreate', async interaction => {
         if (!data) return interaction.reply({ content: '❌ ไม่พบคีย์นี้ในระบบค่ะ', ephemeral: true });
 
         const status = data.hwid ? "🔴 ใช้งานแล้ว" : "🟢 ยังไม่ถูกใช้";
-        
         let expireInfo = "รอการใช้งาน";
+        
         if (data.expiresAt) {
             const expireDate = new Date(data.expiresAt);
             const now = new Date();
             if (now > expireDate) {
                 expireInfo = "❌ หมดอายุแล้ว";
             } else {
-                expireInfo = `หมดอายุ: <t:${Math.floor(expireDate.getTime() / 1000)}:R>`; // แสดงเวลานับถอยหลังใน Discord
+                expireInfo = `หมดอายุ: <t:${Math.floor(expireDate.getTime() / 1000)}:R>`;
             }
         }
 
@@ -219,12 +216,10 @@ client.on('interactionCreate', async interaction => {
         });
     }
 
-    // --- คำสั่ง /resetkey ---
     else if (interaction.commandName === 'resetkey') {
         const key = interaction.options.getString('key');
         if (!keyDatabase[key]) return interaction.reply({ content: '❌ ไม่พบคีย์นี้ค่ะ', ephemeral: true });
 
-        // รีเซ็ตทุกอย่างให้เหมือนใหม่
         keyDatabase[key].hwid = null;
         keyDatabase[key].expiresAt = null; 
 
