@@ -4,23 +4,21 @@ const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
 
 // --- 🔧 ดึงค่าจาก Variables ใน Railway ---
-const TOKEN = process.env.DISCORD_TOKEN;     // โทเค่นบอท
-const CLIENT_ID = process.env.CLIENT_ID;     // ไอดีบอท (Application ID)
-const OWNER_ID = process.env.OWNER_ID;       // ไอดีซีม่อน (Owner ID)
+const TOKEN = process.env.DISCORD_TOKEN;     
+const CLIENT_ID = process.env.CLIENT_ID;     
+const OWNER_ID = process.env.OWNER_ID;       
 const PORT = process.env.PORT || 3000;
 
 // --- 💾 ฐานข้อมูลจำลอง (เก็บในแรม) ---
-// *หมายเหตุ: ถ้ารีสตาร์ทเซิฟ ข้อมูลจะหาย ถ้าจะเอาถาวรต้องเชื่อม MongoDB ภายหลังนะค้า*
 let keyDatabase = {}; 
 
 // ==========================================
-// 🌐 ส่วนที่ 1: WEB SERVER (API สำหรับ Roblox)
+// 🌐 ส่วนที่ 1: WEB SERVER (API)
 // ==========================================
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// API เช็คคีย์ (สำหรับสคริปต์ Roblox)
 app.get('/api/verify', (req, res) => {
     const { key, hwid } = req.query;
 
@@ -30,16 +28,13 @@ app.get('/api/verify', (req, res) => {
     if (!keyData) return res.json({ status: "invalid", msg: "ไม่พบคีย์นี้ในระบบ" });
 
     if (keyData.hwid === null) {
-        // คีย์ใหม่ -> ผูก HWID ทันที
         keyData.hwid = hwid;
         keyData.used = true;
         keyData.usedDate = new Date().toISOString();
         return res.json({ status: "success", msg: "Activated Success" });
     } else if (keyData.hwid === hwid) {
-        // คีย์เก่า แต่เครื่องเดิม -> ผ่าน
         return res.json({ status: "success", msg: "Welcome Back" });
     } else {
-        // คีย์เก่า เครื่องใหม่ -> ไม่ผ่าน
         return res.json({ status: "hwid_mismatch", msg: "Hardware ID ไม่ตรง!" });
     }
 });
@@ -49,15 +44,23 @@ app.listen(PORT, () => {
 });
 
 // ==========================================
-// 🤖 ส่วนที่ 2: DISCORD BOT (Slash Commands)
+// 🤖 ส่วนที่ 2: DISCORD BOT
 // ==========================================
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
-// สร้างรายการคำสั่ง
 const commands = [
+    // --- แก้ไขคำสั่ง /genkey ให้เทพขึ้น ---
     new SlashCommandBuilder()
         .setName('genkey')
-        .setDescription('✨ สร้างคีย์ VIP ใหม่ (เฉพาะ Owner)')
+        .setDescription('✨ สร้างคีย์ VIP (เฉพาะ Owner)')
+        .addStringOption(option => 
+            option.setName('prefix')
+            .setDescription('ชื่อนำหน้าคีย์ (เช่น SWIFT, XYPHER)')
+            .setRequired(true)) // บังคับใส่ชื่อหน้า
+        .addIntegerOption(option =>
+            option.setName('amount')
+            .setDescription('จำนวนคีย์ที่ต้องการสร้าง (สูงสุด 20)')
+            .setRequired(false)) // ไม่ใส่ = 1 คีย์
         .addStringOption(option => 
             option.setName('note')
             .setDescription('โน้ตกันลืม (เช่น ชื่อลูกค้า)')
@@ -65,7 +68,7 @@ const commands = [
             
     new SlashCommandBuilder()
         .setName('checkkey')
-        .setDescription('🔍 เช็คสถานะคีย์ (เฉพาะ Owner)')
+        .setDescription('🔍 เช็คสถานะคีย์')
         .addStringOption(option => 
             option.setName('key')
             .setDescription('คีย์ที่ต้องการเช็ค')
@@ -73,7 +76,7 @@ const commands = [
 
     new SlashCommandBuilder()
         .setName('resetkey')
-        .setDescription('🔄 รีเซ็ต HWID ของคีย์ (เฉพาะ Owner)')
+        .setDescription('🔄 รีเซ็ต HWID')
         .addStringOption(option => 
             option.setName('key')
             .setDescription('คีย์ที่ต้องการรีเซ็ต')
@@ -81,16 +84,13 @@ const commands = [
 ]
 .map(command => command.toJSON());
 
-// ลงทะเบียนคำสั่ง Slash Command (ทำทุกครั้งที่บอทเริ่มทำงาน)
 const rest = new REST({ version: '10' }).setToken(TOKEN);
 
 (async () => {
     try {
-        console.log('กำลังลงทะเบียน Slash Commands...');
-        // ลงทะเบียนคำสั่งแบบ Global (อาจใช้เวลาอัปเดต 1 ชม.)
-        // หรือถ้าอยากให้ขึ้นทันที ให้ใช้ Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID) แทน
+        console.log('กำลังอัปเดตคำสั่ง Slash Commands...');
         await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
-        console.log('✅ ลงทะเบียนคำสั่งเรียบร้อยแล้วค่า!');
+        console.log('✅ ลงทะเบียนคำสั่งใหม่เรียบร้อย!');
     } catch (error) {
         console.error(error);
     }
@@ -99,31 +99,48 @@ const rest = new REST({ version: '10' }).setToken(TOKEN);
 client.on('interactionCreate', async interaction => {
     if (!interaction.isChatInputCommand()) return;
 
-    // 🔒 ระบบความปลอดภัย: เช็คว่าเป็นซีม่อนรึเปล่า?
     if (interaction.user.id !== OWNER_ID) {
-        return interaction.reply({ content: '🚫 ขอโทษนะคะ! คำสั่งนี้ใช้ได้เฉพาะเจ้าของร้าน (Zemon) เท่านั้นค่ะ', ephemeral: true });
+        return interaction.reply({ content: '🚫 เฉพาะซีม่อน (Owner) เท่านั้นที่ใช้ได้ค่ะ!', ephemeral: true });
     }
 
-    // --- คำสั่ง /genkey ---
+    // --- คำสั่ง /genkey ปรับปรุงใหม่ ---
     if (interaction.commandName === 'genkey') {
-        const note = interaction.options.getString('note') || 'ไม่มีโน้ต';
-        const newKey = "ZEMON-" + uuidv4().split('-')[0].toUpperCase() + "-" + uuidv4().split('-')[1].toUpperCase();
-        
-        // บันทึกลง Database
-        keyDatabase[newKey] = {
-            hwid: null,
-            used: false,
-            note: note,
-            createdAt: new Date().toISOString()
-        };
+        const prefix = interaction.options.getString('prefix').toUpperCase(); // บังคับตัวพิมพ์ใหญ่
+        const note = interaction.options.getString('note') || 'ไม่ระบุ';
+        let amount = interaction.options.getInteger('amount') || 1;
 
+        // กันสร้างเยอะเกินจนค้าง
+        if (amount > 20) amount = 20;
+        if (amount < 1) amount = 1;
+
+        let generatedKeysList = [];
+
+        // ลูปสร้างคีย์ตามจำนวนที่ขอ
+        for (let i = 0; i < amount; i++) {
+            // สูตรสร้างคีย์: PREFIX + ส่วนสุ่มจาก UUID (ตัดมาแค่ส่วนหลังให้ดูสั้นกระชับแต่เดายาก)
+            // ตัวอย่าง: SWIFT-A1B2-C3D4
+            const randomPart = uuidv4().split('-')[1].toUpperCase() + uuidv4().split('-')[2].toUpperCase(); 
+            const newKey = `${prefix}-${randomPart}`;
+
+            keyDatabase[newKey] = {
+                hwid: null,
+                used: false,
+                note: note,
+                createdAt: new Date().toISOString()
+            };
+            
+            generatedKeysList.push(newKey);
+        }
+
+        // จัดหน้าตาข้อความให้ก๊อปง่ายๆ
+        const keyString = generatedKeysList.join('\n'); // ขึ้นบรรทัดใหม่
+        
         await interaction.reply({ 
-            content: `🎉 **สร้างคีย์สำเร็จค่าซีม่อน!**\n🔑 Key: \`${newKey}\`\n📝 Note: ${note}`, 
-            ephemeral: true // เห็นแค่เราคนเดียว
+            content: `🎉 **สร้างเสร็จแล้วค่าซีม่อน!** (${amount} คีย์)\n📝 Note: ${note}\n\n\`\`\`\n${keyString}\n\`\`\``, 
+            ephemeral: true 
         });
     }
 
-    // --- คำสั่ง /checkkey ---
     else if (interaction.commandName === 'checkkey') {
         const key = interaction.options.getString('key');
         const data = keyDatabase[key];
@@ -139,15 +156,14 @@ client.on('interactionCreate', async interaction => {
         });
     }
 
-    // --- คำสั่ง /resetkey ---
     else if (interaction.commandName === 'resetkey') {
         const key = interaction.options.getString('key');
         if (!keyDatabase[key]) return interaction.reply({ content: '❌ ไม่พบคีย์นี้ค่ะ', ephemeral: true });
 
         keyDatabase[key].hwid = null;
-        keyDatabase[key].used = false;
+        keyDatabase[key].used = false; // เผื่ออยากให้กลับมาสถานะว่าง
 
-        await interaction.reply({ content: `✅ **รีเซ็ต HWID เรียบร้อยแล้วค่ะ!**\nลูกค้าสามารถเอาคีย์ \`${key}\` ไปใส่เครื่องใหม่ได้เลย`, ephemeral: true });
+        await interaction.reply({ content: `✅ **รีเซ็ตเรียบร้อย!**\nคีย์ \`${key}\` พร้อมใช้งานใหม่แล้วค่ะ`, ephemeral: true });
     }
 });
 
