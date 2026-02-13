@@ -1,7 +1,6 @@
 const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } = require('discord.js');
 const express = require('express');
 const cors = require('cors');
-const { v4: uuidv4 } = require('uuid');
 
 // --- 🔧 ดึงค่าจาก Variables ใน Railway ---
 const TOKEN = process.env.DISCORD_TOKEN;     
@@ -49,18 +48,17 @@ app.listen(PORT, () => {
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
 const commands = [
-    // --- แก้ไขคำสั่ง /genkey ให้เทพขึ้น ---
     new SlashCommandBuilder()
         .setName('genkey')
         .setDescription('✨ สร้างคีย์ VIP (เฉพาะ Owner)')
         .addStringOption(option => 
             option.setName('prefix')
-            .setDescription('ชื่อนำหน้าคีย์ (เช่น SWIFT, XYPHER)')
-            .setRequired(true)) // บังคับใส่ชื่อหน้า
+            .setDescription('ชื่อนำหน้าคีย์ (เช่น SWIFT)')
+            .setRequired(true)) 
         .addIntegerOption(option =>
             option.setName('amount')
-            .setDescription('จำนวนคีย์ที่ต้องการสร้าง (สูงสุด 20)')
-            .setRequired(false)) // ไม่ใส่ = 1 คีย์
+            .setDescription('จำนวนคีย์ที่ต้องการสร้าง')
+            .setRequired(false)) 
         .addStringOption(option => 
             option.setName('note')
             .setDescription('โน้ตกันลืม (เช่น ชื่อลูกค้า)')
@@ -96,6 +94,16 @@ const rest = new REST({ version: '10' }).setToken(TOKEN);
     }
 })();
 
+// 🔥 ฟังก์ชันสุ่มแบบ Chaos (ตัวเล็ก+ใหญ่+ตัวเลข) *ตัดอักษรพิเศษออกกันบั๊ก URL*
+function generateChaosString(length) {
+    const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let result = '';
+    for (let i = 0; i < length; i++) {
+        result += characters.charAt(Math.floor(Math.random() * characters.length));
+    }
+    return result;
+}
+
 client.on('interactionCreate', async interaction => {
     if (!interaction.isChatInputCommand()) return;
 
@@ -103,24 +111,22 @@ client.on('interactionCreate', async interaction => {
         return interaction.reply({ content: '🚫 เฉพาะซีม่อน (Owner) เท่านั้นที่ใช้ได้ค่ะ!', ephemeral: true });
     }
 
-    // --- คำสั่ง /genkey ปรับปรุงใหม่ ---
+    // --- คำสั่ง /genkey ---
     if (interaction.commandName === 'genkey') {
-        const prefix = interaction.options.getString('prefix').toUpperCase(); // บังคับตัวพิมพ์ใหญ่
+        const prefix = interaction.options.getString('prefix').toUpperCase();
         const note = interaction.options.getString('note') || 'ไม่ระบุ';
         let amount = interaction.options.getInteger('amount') || 1;
 
-        // กันสร้างเยอะเกินจนค้าง
-        if (amount > 20) amount = 20;
+        if (amount > 50) amount = 50; 
         if (amount < 1) amount = 1;
 
         let generatedKeysList = [];
 
-        // ลูปสร้างคีย์ตามจำนวนที่ขอ
+        // ลูปสร้างคีย์
         for (let i = 0; i < amount; i++) {
-            // สูตรสร้างคีย์: PREFIX + ส่วนสุ่มจาก UUID (ตัดมาแค่ส่วนหลังให้ดูสั้นกระชับแต่เดายาก)
-            // ตัวอย่าง: SWIFT-A1B2-C3D4
-            const randomPart = uuidv4().split('-')[1].toUpperCase() + uuidv4().split('-')[2].toUpperCase(); 
-            const newKey = `${prefix}-${randomPart}`;
+            // สุ่ม 16 ตัวอักษร
+            const chaosSuffix = generateChaosString(16); 
+            const newKey = `${prefix}-${chaosSuffix}`;
 
             keyDatabase[newKey] = {
                 hwid: null,
@@ -132,11 +138,12 @@ client.on('interactionCreate', async interaction => {
             generatedKeysList.push(newKey);
         }
 
-        // จัดหน้าตาข้อความให้ก๊อปง่ายๆ
-        const keyString = generatedKeysList.join('\n'); // ขึ้นบรรทัดใหม่
+        const keyString = generatedKeysList.join('\n');
         
+        // ✨ แก้ไขตรงนี้: ใช้ ` (Backtick เดียว) ครอบหัวท้าย
+        // เพื่อให้กด Copy ง่ายๆ ในมือถือ
         await interaction.reply({ 
-            content: `🎉 **สร้างเสร็จแล้วค่าซีม่อน!** (${amount} คีย์)\n📝 Note: ${note}\n\n\`\`\`\n${keyString}\n\`\`\``, 
+            content: `🎉 **สร้างเสร็จแล้วค่าซีม่อน!** (${amount} คีย์)\n📝 Note: ${note}\n\n\`${keyString}\``, 
             ephemeral: true 
         });
     }
@@ -161,7 +168,7 @@ client.on('interactionCreate', async interaction => {
         if (!keyDatabase[key]) return interaction.reply({ content: '❌ ไม่พบคีย์นี้ค่ะ', ephemeral: true });
 
         keyDatabase[key].hwid = null;
-        keyDatabase[key].used = false; // เผื่ออยากให้กลับมาสถานะว่าง
+        keyDatabase[key].used = false; 
 
         await interaction.reply({ content: `✅ **รีเซ็ตเรียบร้อย!**\nคีย์ \`${key}\` พร้อมใช้งานใหม่แล้วค่ะ`, ephemeral: true });
     }
